@@ -3,25 +3,20 @@ server/app.py
 ─────────────
 Serveur privé de licences Eclipse Macro.
 À déployer UNIQUEMENT chez toi — les utilisateurs n'y ont pas accès.
-
-Lancement :
-    uvicorn app:app --host 0.0.0.0 --port 443 --ssl-keyfile key.pem --ssl-certfile cert.pem
-
-Dépendances :
-    pip install fastapi uvicorn[standard] python-dotenv
 """
 
 import os
+import secrets
 import sqlite3
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Header, Depends
 from pydantic import BaseModel
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-API_SECRET = os.getenv("API_SECRET", "@Eclipse270107")  # ← même valeur que dans license_client.py
+API_SECRET = os.getenv("API_SECRET", "@Eclipse270107")
 DB_PATH    = os.getenv("DB_PATH", "licenses.db")
 
-app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)  # désactive la doc publique
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 
 # ── Base de données ────────────────────────────────────────────────────────────
@@ -51,31 +46,68 @@ def init_db():
 init_db()
 
 
-# ── Sécurité : vérification du secret partagé ─────────────────────────────────
+# ── Sécurité ──────────────────────────────────────────────────────────────────
 
 def check_secret(x_api_secret: str = Header(...)):
     if x_api_secret != API_SECRET:
         raise HTTPException(status_code=403, detail="Accès refusé.")
 
 
-# ── Modèles Pydantic ──────────────────────────────────────────────────────────
+# ── Génération de clé ─────────────────────────────────────────────────────────
+
+def _generate_key() -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    segments = []
+    for _ in range(4):
+        segment = "".join(secrets.choice(alphabet) for _ in range(4))
+        segments.append(segment)
+    return "-".join(segments)
+
+
+# ── Modèles ───────────────────────────────────────────────────────────────────
 
 class LicenseRequest(BaseModel):
     license_key: str
     device_id: str
 
+class GenerateRequest(BaseModel):
+    count: int = 1
+
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+@app.post("/admin/generate")
+def generate(req: GenerateRequest, db: sqlite3.Connection = Depends(get_db), _=Depends(check_secret)):
+    """Génère N nouvelles clés de licence (admin uniquement)."""
+    if req.count < 1 or req.count > 100:
+        raise HTTPException(status_code=400, detail="count doit être entre 1 et 100.")
+    generated = []
+    attempts = 0
+    while len(generated) < req.count and attempts < req.count * 10:
+        key = _generate_key()
+        try:
+            db.execute(
+                "INSERT INTO licenses (license_key, activated, created_at) VALUES (?, 0, ?)",
+                (key, datetime.utcnow().isoformat())
+            )
+            db.commit()
+            generated.append(key)
+        except sqlite3.IntegrityError:
+            attempts += 1
+    return {"generated": len(generated), "keys": generated}
+
+
+@app.post("/admin/list")
+def list_licenses(db: sqlite3.Connection = Depends(get_db), _=Depends(check_secret)):
+    """Liste toutes les licences et leur statut (admin uniquement)."""
+    rows = db.execute(
+        "SELECT license_key, activated, device_id, created_at FROM licenses ORDER BY created_at"
+    ).fetchall()
+    return {"total": len(rows), "licenses": [dict(r) for r in rows]}
+
+
 @app.post("/activate")
 def activate(req: LicenseRequest, db: sqlite3.Connection = Depends(get_db), _=Depends(check_secret)):
-    """
-    Active une licence :
-    - Licence inconnue          → 404
-    - Jamais activée            → associe au device_id, retourne valid=True
-    - Déjà activée, même device → retourne valid=True
-    - Déjà activée, autre device→ retourne valid=False
-    """
     key = req.license_key.strip().upper()
     row = db.execute("SELECT * FROM licenses WHERE license_key = ?", (key,)).fetchone()
 
@@ -83,7 +115,6 @@ def activate(req: LicenseRequest, db: sqlite3.Connection = Depends(get_db), _=De
         return {"valid": False, "message": "Clé de licence introuvable."}
 
     if not row["activated"]:
-        # Première activation : lie la clé à ce device
         db.execute(
             "UPDATE licenses SET device_id = ?, activated = 1 WHERE license_key = ?",
             (req.device_id, key)
@@ -99,10 +130,6 @@ def activate(req: LicenseRequest, db: sqlite3.Connection = Depends(get_db), _=De
 
 @app.post("/verify")
 def verify(req: LicenseRequest, db: sqlite3.Connection = Depends(get_db), _=Depends(check_secret)):
-    """
-    Vérifie si une licence est valide pour ce device_id.
-    Retourne uniquement valid=True ou valid=False.
-    """
     key = req.license_key.strip().upper()
     row = db.execute("SELECT * FROM licenses WHERE license_key = ?", (key,)).fetchone()
 
