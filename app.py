@@ -276,3 +276,5 @@ def verify(req: LicenseRequest, db=Depends(get_db), _=Depends(require_client)):
         return {"valid": True, "expires_at": exp.isoformat() if exp else "permanent"}
 
     return {"valid": False}
+
+
