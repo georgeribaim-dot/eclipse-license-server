@@ -1,5 +1,5 @@
 {
-    "version": "3.2",
-    "download_url": "https://github.com/georgeribaim-dot/TON_REPO/releases/download/v3.2/EclipseMacros.exe",
-    "changelog": "- Version initiale du launcher"
+    "version": "3.2.1",
+    "download_url": "https://github.com/georgeribaim-dot/EclipseMacros/releases/download/v3.2.1/EclipseMacros_ClientBuild.zip",
+    "changelog": "v3.2.1\n• Fix ...\n• Ajout ..."
 }
